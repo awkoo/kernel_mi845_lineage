@@ -218,6 +218,4 @@ source "drivers/halls/Kconfig"
 
 source "drivers/rekernel/Kconfig"
 
-source "drivers/kernelsu/Kconfig"
-
 endmenu
