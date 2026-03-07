@@ -216,6 +216,4 @@ source "drivers/gps/Kconfig"
 
 source "drivers/halls/Kconfig"
 
-source "drivers/rekernel/Kconfig"
-
 endmenu
