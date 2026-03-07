@@ -8055,7 +8055,7 @@ static void cpuset_cpu_active(void)
 		 */
 		cpuset_force_rebuild();
 	}
-	cpuset_update_active_cpus();
+	cpuset_update_active_cpus(true);
 }
 
 static int cpuset_cpu_inactive(unsigned int cpu)
@@ -8078,7 +8078,7 @@ static int cpuset_cpu_inactive(unsigned int cpu)
 
 		if (overflow)
 			return -EBUSY;
-		cpuset_update_active_cpus();
+		cpuset_update_active_cpus(false);
 	} else {
 		num_cpus_frozen++;
 		partition_sched_domains(1, NULL, NULL);

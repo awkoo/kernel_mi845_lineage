@@ -1,9 +1,5 @@
-#ifndef _LINUX_SCHED_SYSCTL_H
-#define _LINUX_SCHED_SYSCTL_H
-
-#include <linux/types.h>
-
-struct ctl_table;
+#ifndef _SCHED_SYSCTL_H
+#define _SCHED_SYSCTL_H
 
 #ifdef CONFIG_DETECT_HUNG_TASK
 extern int	     sysctl_hung_task_check_count;
@@ -152,4 +148,4 @@ extern int sched_little_cluster_coloc_fmin_khz_handler(struct ctl_table *table,
 extern char sched_lib_name[LIB_PATH_LENGTH];
 extern unsigned int sched_lib_mask_force;
 extern bool is_sched_lib_based_app(pid_t pid);
-#endif /* _LINUX_SCHED_SYSCTL_H */
+#endif /* _SCHED_SYSCTL_H */
