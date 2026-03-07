@@ -51,12 +51,14 @@ config IOSCHED_BFQ
 	  applications. If compiled built-in (saying Y here), BFQ can
 	  be configured to support hierarchical scheduling.
 
-config BFQ_GROUP_IOSCHED
+config CGROUP_BFQIO
 	bool "BFQ hierarchical scheduling support"
 	depends on CGROUPS && IOSCHED_BFQ=y
 	default n
 	---help---
-	  Enable hierarchical scheduling in BFQ, using the blkio controller.
+	  Enable hierarchical scheduling in BFQ, using the cgroups
+	  filesystem interface.  The name of the subsystem will be
+	  bfqio.
 
 choice
 	prompt "Default I/O scheduler"
