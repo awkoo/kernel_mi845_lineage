@@ -1,39 +1,43 @@
-#include <linux/export.h>
-#include <linux/fs.h>
-#include <linux/kobject.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/version.h> /* LINUX_VERSION_CODE, KERNEL_VERSION macros */
+#include "kernel_includes.h"
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
-#include <uapi/asm-generic/errno.h>
-#else
-#include <asm-generic/errno.h>
-#endif
+// uapi
+#include "include/uapi/app_profile.h"
+#include "include/uapi/feature.h"
+#include "include/uapi/selinux.h"
+#include "include/uapi/supercall.h"
+#include "include/uapi/sulog.h"
 
-#define ksu_get_uid_t(x) *(unsigned int *)&(x)
+// includes
+#include "include/klog.h"
+#include "include/arch.h"
+#include "include/ksu.h"
 
-#include "allowlist.h"
-#include "apk_sign.h"
-#include "app_profile.h"
-#include "arch.h"
-#include "core_hook.h"
-#include "feature.h"
-#include "file_wrapper.h"
+// kernel compat, lite ones
 #include "kernel_compat.h"
-#include "klog.h"
-#include "ksud.h"
-#include "ksu.h"
-#include "manager.h"
-#include "sucompat.h"
-#include "supercalls.h"
-#include "throne_tracker.h"
-#include "su_mount_ns.h"
+
+#include "policy/app_profile.h"
+#include "policy/allowlist.h"
+#include "policy/feature.h"
+#include "manager/apk_sign.h"
+#include "manager/manager_identity.h"
+#include "manager/throne_tracker.h"
+#include "supercall/internal.h"
+#include "supercall/supercall.h"
+#include "infra/su_mount_ns.h"
+#include "infra/file_wrapper.h"
+#include "infra/event_queue.h"
+#include "feature/adb_root.h"
+#include "feature/kernel_umount.h"
+#include "feature/sucompat.h"
+#include "feature/sulog.h"
+#include "runtime/ksud.h"
+#include "sulog/event.h"
+#include "sulog/fd.h"
+
 #include "selinux/selinux.h"
 #include "selinux/sepolicy.h"
 
 // selinux includes
-#include <linux/lsm_audit.h>
 #include "avc_ss.h"
 #include "objsec.h"
 #include "ss/services.h"
@@ -45,18 +49,30 @@
 
 // unity build
 #include "tiny_sulog.c"
-#include "allowlist.c"
-#include "app_profile.c"
-#include "apk_sign.c"
-#include "sucompat.c"
-#include "throne_tracker.c"
-#include "core_hook.c"
-#include "supercalls.c"
-#include "feature.c"
-#include "su_mount_ns.c"
-#include "ksud.c"
-#include "kernel_compat.c"
-#include "file_wrapper.c"
+#include "policy/allowlist.c"
+#include "policy/app_profile.c"
+#include "policy/feature.c"
+#include "manager/apk_sign.c"
+#include "manager/throne_tracker.c"
+
+#include "supercall/perm.c"
+#include "supercall/dispatch.c"
+#include "supercall/supercall.c"
+
+#include "infra/su_mount_ns.c"
+#include "infra/file_wrapper.c"
+#include "infra/event_queue.c"
+
+#include "feature/adb_root.c"
+#include "feature/kernel_umount.c"
+#include "feature/sucompat.c"
+#include "feature/sulog.c"
+#include "runtime/ksud.c"
+
+#include "sulog/event.c"
+#include "sulog/fd.c"
+
+#include "hook/core_hook.c"	// lsm
 
 #include "selinux/selinux.c"
 #include "selinux/sepolicy.c"
@@ -64,23 +80,22 @@
 
 #ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
 #ifdef CONFIG_ARM64
-#include "syscall_table_hook.c"
+#include "hook/syscall_table_hook_arm64.c"
 #elif CONFIG_ARM
-#include "syscall_table_hook_arm.c"
+#include "hook/syscall_table_hook_arm.c"
 #endif
 #endif
 
-#ifdef CONFIG_KSU_KPROBES_KSUD
-#include "kp_ksud.c"
-#endif
-
-#ifdef CONFIG_KSU_KRETPROBES_SUCOMPAT
-#include "rp_sucompat.c"
+#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
+#include "hook/kp_ksud.c"
 #endif
 
 #ifdef CONFIG_KSU_EXTRAS
 #include "extras.c"
 #endif
+
+// __weak fn's
+#include "kernel_compat.c"
 
 struct cred* ksu_cred;
 
@@ -109,6 +124,16 @@ int __init kernelsu_init(void)
 
 	ksu_sucompat_init(); // so the feature is registered
 
+	ksu_kernel_umount_init(); // so the feature is registered
+
+#ifdef CONFIG_KSU_FEATURE_SULOG	
+	ksu_sulog_init(); // so the feature is registered
+#endif
+
+#ifdef CONFIG_KSU_FEATURE_ADBROOT
+	ksu_adb_root_init(); // so the feature is registered
+#endif
+
 	ksu_core_init();
 
 	ksu_allowlist_init();
@@ -123,7 +148,7 @@ int __init kernelsu_init(void)
 	ksu_syscall_table_hook_init();
 #endif
 
-#ifdef CONFIG_KSU_KPROBES_KSUD
+#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
 	kp_ksud_init();
 #endif
 
