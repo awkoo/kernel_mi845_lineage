@@ -27,9 +27,9 @@ jobs:
           - ursa
     steps:
       - name: 安装软件包
+        if: env.PACKAGES != ''
         env:
           PACKAGES:
-            ccache
             binutils-aarch64-linux-gnu
             binutils-arm-linux-gnueabi
         run: |
@@ -39,7 +39,7 @@ jobs:
       - name: 安装make4.4.1-2
         run: |
           curl -LSs http://ftp.debian.org/debian/pool/main/m/make-dfsg/make_4.4.1-2_amd64.deb -o make.deb
-          sudo apt-get install -y ./make.deb
+          sudo apt-get install -y -q ./make.deb
           rm ./make.deb
 
       - name: 同步仓库
@@ -49,17 +49,25 @@ jobs:
 
       - name: 缓存Clang
         id: cache-clang
-        uses: actions/cache@main
+        uses: actions/cache/restore@main
         with:
           path: clang
           key: clang-${{ env.AOSP_TOOLCHAIN_BRANCH }}-${{ env.AOSP_CLANG_VERSION }}
 
       - name: 下载Clang
+        id: download_clang
         if: steps.cache-clang.outputs.cache-hit != 'true'
-        run:
-          mkdir -p clang &&
-          curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/${{ env.AOSP_TOOLCHAIN_BRANCH }}-release/clang-${{ env.AOSP_CLANG_VERSION }}.tar.gz" |
-          tar xz -C clang
+        run: |
+          mkdir -p clang
+          wget -c -t 10 "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/${{ env.AOSP_TOOLCHAIN_BRANCH }}-release/clang-${{ env.AOSP_CLANG_VERSION }}.tar.gz" -O clang.tgz
+          tar -zxvf clang.tgz -C clang/
+
+      - name: 保存Clang
+        if: always() && steps.cache-clang.outputs.cache-hit != 'true' && steps.download_clang.outcome == 'success'
+        uses: actions/cache/save@main
+        with:
+          path: clang
+          key: clang-${{ env.AOSP_TOOLCHAIN_BRANCH }}-${{ env.AOSP_CLANG_VERSION }}
 
       - name: 缓存ccache
         uses: hendrikmuhs/ccache-action@main
@@ -73,12 +81,12 @@ jobs:
         env:
           MAKE_ARGS:
             -j$(nproc --all)
+            O=out
+            LLVM=1
+            LLVM_IAS=1
             CC="ccache clang"
             LD=ld.lld
             ARCH=arm64
-            LLVM=1
-            LLVM_IAS=1
-            O=out
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           CONFIG_FILES:
@@ -112,31 +120,15 @@ jobs:
           EOF
           zip -qr9 Anykernel3-${{ matrix.device }}.zip * -x .git .github README.md *placeholder
 
-      - name: 打包(boot)
-        run: |
-          git clone https://android.googlesource.com/platform/system/tools/mkbootimg --depth=1 mkbootimg
-          cp kernel/out/arch/arm64/boot/Image.gz-dtb mkbootimg/
-          cd mkbootimg
-          boot_url=$(curl -LSs https://download.lineageos.org/api/v2/devices/${{ matrix.device }}/builds | jq -r '.[0].files[1].url')
-          curl -LSs $boot_url -o boot.img
-          mkbootimg_args=$(./unpack_bootimg.py --out out --boot_img boot.img --format mkbootimg)
-          mv Image.gz-dtb out/kernel
-          eval "./mkbootimg.py $mkbootimg_args -o boot-lineage-${{ matrix.device }}.img"
-
       - name: 上传文件
         uses: actions/upload-artifact@main
         with:
           name: kernel-${{ matrix.device }}-ak3
           path: ak3/Anykernel3-${{ matrix.device }}.zip
 
-      - name: 上传文件
-        uses: actions/upload-artifact@main
-        with:
-          name: kernel-${{ matrix.device }}-boot
-          path: mkbootimg/boot-lineage-${{ matrix.device }}.img
-
   release:
     name: 发布
+    if: github.event_name == 'push'
     permissions: { contents: write }
     runs-on: ubuntu-latest
     needs: build
@@ -151,54 +143,61 @@ jobs:
       - name: 获取当前时间
         id: time
         run: |
-          echo "time=$(TZ='Asia/Shanghai' date -u +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
-          echo "timestamp=$(date +%s)" >> $GITHUB_OUTPUT
-
-      - name: 下载ci管理器
-        continue-on-error: true
-        uses: dawidd6/action-download-artifact@master
-        with:
-          repo: rsuntk/KernelSU
-          workflow_conclusion: success
-          name: manager
-          workflow: build-manager.yml
-          path: manager
-          check_artifacts: true
-          search_artifacts: true
+          NOW=$(date +%s)
+          TIME_STR=$(TZ='Asia/Shanghai' date -d "@$NOW" +'%Y%m%d%H%M')
+          echo "timestamp=$NOW" >> $GITHUB_OUTPUT
+          echo "time=$TIME_STR" >> $GITHUB_OUTPUT
 
       - name: 发布
         uses: softprops/action-gh-release@master
+        id: release
         with:
           tag_name: rel-${{ steps.time.outputs.timestamp }}
           name: Kernel build ${{ steps.time.outputs.time }}
           prerelease: ${{ startsWith(github.ref_name, 'dev/') }}
           files: |
             kernel/*
-            manager/*
 
       - name: 发送Telegram通知
         continue-on-error: true
-        env:
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-          COMMIT_URL: ${{ github.event.head_commit.url }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/rel-${{ steps.time.outputs.timestamp }}
         run: |
-          msg="*CI ${{ steps.time.outputs.time }}*
-          > Branch/分支: \`${{ github.ref_name }}\`
-          \`\`\`
-          $COMMIT_MESSAGE
-          \`\`\`
-          [Download/下载]($RELEASE_URL)
-          [Commit/提交]($COMMIT_URL)
-          [Run/工作流]($RUN_URL)
+          IDS=(${{ join(github.event.commits.*.id, ' ') }})
+          MAX=6
+          if [ "${#IDS[@]}" -gt "$MAX" ]; then
+            COMMIT_IDS_TEXT="$(printf "%s\n" "${IDS[@]:0:$MAX}"; echo "......")"
+          else
+            COMMIT_IDS_TEXT="$(printf "%s\n" "${IDS[@]}")"
+          fi
+          MSG="\
+          <b>CI ${{ steps.time.outputs.time }}</b>
+          <pre>\
+          项目: ${{ github.repository }}
+          分支: ${{ github.ref_name }}\
+          </pre>
+          <b>提交ID:</b>
+          <pre>$COMMIT_IDS_TEXT</pre>\
           "
-          curl -LSs https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-                      -F 'chat_id="${{ secrets.TELEGRAM_CHAT_ID }}"' \
-                      -F 'message_thread_id=${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}' \
-                      -F 'parse_mode="markdownv2"' \
-                      -F "text=\"$msg\"" | tee Markdown.txt
-          ! ${{ startsWith(github.ref_name, 'stable/') }} || \
-          curl https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/pinChatMessage \
-                      -F 'chat_id="${{ secrets.TELEGRAM_CHAT_ID }}"' \
-                      -F message_id=$(jq '.result.message_id' Markdown.txt)
+          PREVIEW_OPTIONS="{ \
+            \"url\": \"${{ steps.release.outputs.url }}\", \
+            \"prefer_small_media\": true, \
+            \"show_above_text\": true \
+          }"
+          BUTTONS="{\"inline_keyboard\": [ [ \
+            { \"text\": \"下载链接\", \"url\": \"${{ steps.release.outputs.url }}\" }, \
+            { \"text\": \"对比差异\", \"url\": \"${{ github.event.compare }}\" } \
+          ] ] }"
+          curl -LSs -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+                    -d "chat_id=${{ vars.TELEGRAM_CHAT_ID }}" \
+                    -d "message_thread_id=${{ vars.TELEGRAM_MESSAGE_THREAD_ID }}" \
+                    -d "parse_mode=HTML" \
+                    --data-urlencode "text=$MSG" \
+                    -d "link_preview_options=$PREVIEW_OPTIONS" \
+                    -d "reply_markup=$BUTTONS" \
+                    -o response.txt && \
+          (! ${{ startsWith(github.ref_name, 'stable/') }} || \
+          curl -LSs -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/pinChatMessage \
+                    -d "chat_id=${{ vars.TELEGRAM_CHAT_ID }}" \
+                    -d "message_id=$(jq '.result.message_id' response.txt)")
+          if [ "${{ runner.debug }}" = "1" ]; then
+              cat response.txt
+          fi
