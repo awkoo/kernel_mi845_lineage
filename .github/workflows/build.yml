@@ -92,6 +92,7 @@ jobs:
           CONFIG_FILES:
             vendor/xiaomi/mi845_defconfig
             vendor/xiaomi/${{ matrix.device }}.config
+            lxc.config
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           export KBUILD_BUILD_USER=${{ github.repository_owner }}
