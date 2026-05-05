@@ -38,12 +38,29 @@ static struct policydb *get_policydb(void) { return &policydb; }
 static inline rwlock_t *ksu_get_policy_rwlock() { return &selinux_state.ss->policy_rwlock; }
 #elif defined(KSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK)
 static inline rwlock_t *ksu_get_policy_rwlock() { extern rwlock_t policy_rwlock; return &policy_rwlock; }
+#elif defined(CONFIG_KALLSYMS)
+static noinline rwlock_t *ksu_get_policy_rwlock()
+{
+	static bool already_ran = false;
+
+	static rwlock_t *policy_rwlock_ksym = NULL;
+
+	if (likely(already_ran))
+		return policy_rwlock_ksym;
+
+	policy_rwlock_ksym = (rwlock_t *)kallsyms_lookup_name("policy_rwlock");
+	if (policy_rwlock_ksym)
+		pr_info("apply_kernelsu_rules: policy_rwlock: 0x%lx via ksym\n", (uintptr_t)policy_rwlock_ksym);
+
+	already_ran = true;
+	return policy_rwlock_ksym;
+}
 #else
 static inline rwlock_t *ksu_get_policy_rwlock() { return NULL; }
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 2, 0) || defined(KSU_COMPAT_HAS_BACKPORTED_CPUS_PTR)
-static inline cpumask_t *ksu_get_current_cpumask_t() { return current->cpus_ptr; }
+static inline const cpumask_t *ksu_get_current_cpumask_t() { return current->cpus_ptr; }
 #else
 static inline cpumask_t *ksu_get_current_cpumask_t() { return &current->cpus_allowed; }
 #endif
@@ -156,7 +173,6 @@ out_unlock:
 	mutex_unlock(&selinux_state.policy_mutex);
 #else
 
-	cpumask_t old_mask;
 	db = get_policydb();
 
 	rwlock_t *lock = ksu_get_policy_rwlock();
@@ -169,6 +185,7 @@ out_unlock:
 	 * set_cpus_allowed_ptr() can sleep, use raw_smp_processor_id() to get
 	 * current CPU and bypass preemption checks.
 	 */
+	cpumask_t old_mask;
 	cpumask_copy(&old_mask, ksu_get_current_cpumask_t());
 	set_cpus_allowed_ptr(current, cpumask_of(raw_smp_processor_id()));
 
@@ -176,25 +193,8 @@ out_unlock:
 	write_lock(lock);
 	preempt_enable();
 
-	// we do this dance since both kernel and userspace can trigger this
-	if (likely(current && current->mm))
-		goto has_current_mm;
-
 	apply_kernelsu_rules_fn((void *)db);
-	goto out_unlock;
 
-has_current_mm:
-	;
-	// HACK: raise priority of this to the heavens
-	int old_policy = current->policy;
-	struct sched_param old_param = { .sched_priority = current->rt_priority };
-	struct sched_param new_param = { .sched_priority = 50 };
-
-	sched_setscheduler_nocheck(current, 1, &new_param); // raise, fifo, 50
-	apply_kernelsu_rules_fn((void *)db);
-	sched_setscheduler_nocheck(current, old_policy, &old_param); // restore
-
-out_unlock:
 	preempt_disable();
 	write_unlock(lock);
 	set_cpus_allowed_ptr(current, &old_mask);
@@ -649,7 +649,6 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 	u8 *payload;
 	int ret = 0;
 	int success_cmd_count = 0;
-	cpumask_t old_mask;
 
 	if (!user_data || !data_len)
     		return -EINVAL;
@@ -679,35 +678,15 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 	if (!lock)
 		goto do_stop_machine;
 
-	/*
-	 * HACK: write_lock() is held with preempt enabled. DO NOT let the
-	 * task be migrated to any other CPU than the current CPU. And since
-	 * set_cpus_allowed_ptr() can sleep, use raw_smp_processor_id() to get
-	 * current CPU and bypass preemption checks.
-	 */
+	cpumask_t old_mask;
 	cpumask_copy(&old_mask, ksu_get_current_cpumask_t());
 	set_cpus_allowed_ptr(current, cpumask_of(raw_smp_processor_id()));
 
 	write_lock(lock);
 	preempt_enable();
 
-	if (likely(current && current->mm))
-		goto has_current_mm;
-
 	ret = handle_sepolicy_fn((void *)&ctx);
-	goto out_unlock;
 
-has_current_mm:
-	;
-	int old_policy = current->policy;
-	struct sched_param old_param = { .sched_priority = current->rt_priority };
-	struct sched_param new_param = { .sched_priority = 50 };
-
-	sched_setscheduler_nocheck(current, 1, &new_param);
-	ret = handle_sepolicy_fn((void *)&ctx);
-	sched_setscheduler_nocheck(current, old_policy, &old_param);
-
-out_unlock:
 	preempt_disable();
 	write_unlock(lock);
 	set_cpus_allowed_ptr(current, &old_mask);

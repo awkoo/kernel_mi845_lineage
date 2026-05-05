@@ -352,21 +352,7 @@ int get_pkg_from_apk_path(char *pkg, const char *path)
 
 bool is_manager_apk(char *path)
 {
-	int tries = 0;
-
-	while (tries++ < 10 && (current->flags & PF_KTHREAD) ) {
-		if (!is_lock_held(path))
-			break;
-
-		pr_info("%s: waiting for %s\n", __func__, path);
-		msleep(100);
-	}
-
-	// let it go, if retry fails, check_v2_signature will fail to open it anyway
-	if (tries == 10) {
-		pr_info("%s: timeout for %s\n", __func__, path);
-		return false;
-	}
-
-	return check_v2_signature(path, 0x363, "4359c171f32543394cbc23ef908c4bb94cad7c8087002ba164c8230948c21549"); // dummy.keystore
+	return (check_v2_signature(path, 0x363, "4359c171f32543394cbc23ef908c4bb94cad7c8087002ba164c8230948c21549") // dummy.keystore
+	|| check_v2_signature(path, 0x033b, "c371061b19d8c7d7d6133c6a9bafe198fa944e50c1b31c9d8daa8d7f1fc2d2d6")  // kernelsu official
+	);
 }

@@ -6,8 +6,6 @@
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/arch/arm64/include/asm/unistd32.h
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/arch/arm64/include/asm/unistd.h
 
-#define FORCE_VOLATILE(x) *(volatile typeof(x) *)&(x)
-
 #define __ARMEABI_reboot	88
 #define __ARMEABI_execve	11
 #define __ARMEABI_faccessat	334
@@ -20,7 +18,7 @@
 // on 4.19+ its is no longer just a void *sys_call_table[]
 // it becomes syscall_fn_t sys_call_table[];
 
-static syscall_fn_t armeabi_reboot = NULL;
+static syscall_fn_t armeabi_reboot __read_mostly = NULL;
 static long hook_armeabi_reboot(const struct pt_regs *regs)
 {
 	int magic1 = (int)regs->regs[0];
@@ -32,7 +30,8 @@ static long hook_armeabi_reboot(const struct pt_regs *regs)
 	return armeabi_reboot(regs);
 }
 
-static syscall_fn_t armeabi_execve = NULL;
+static syscall_fn_t armeabi_execve __read_mostly = NULL;
+__attribute__((hot))
 static long hook_armeabi_execve(const struct pt_regs *regs)
 {
 	const char __user **filename = (const char __user **)&regs->regs[0];
@@ -42,7 +41,8 @@ static long hook_armeabi_execve(const struct pt_regs *regs)
 	return armeabi_execve(regs);
 }
 
-static syscall_fn_t armeabi_faccessat = NULL;
+static syscall_fn_t armeabi_faccessat __read_mostly = NULL;
+__attribute__((hot))
 static long hook_armeabi_faccessat(const struct pt_regs *regs)
 {
 	const char __user **filename = (const char __user **)&regs->regs[1];
@@ -51,7 +51,8 @@ static long hook_armeabi_faccessat(const struct pt_regs *regs)
 	return armeabi_faccessat(regs);
 }
 
-static syscall_fn_t armeabi_fstatat64 = NULL;
+static syscall_fn_t armeabi_fstatat64 __read_mostly = NULL;
+__attribute__((hot))
 static long hook_armeabi_fstatat64(const struct pt_regs *regs)
 {
 	const char __user **filename = (const char __user **)&regs->regs[1];
@@ -60,7 +61,8 @@ static long hook_armeabi_fstatat64(const struct pt_regs *regs)
 	return armeabi_fstatat64(regs);
 }
 
-static syscall_fn_t armeabi_fstat64 = NULL;
+static syscall_fn_t armeabi_fstat64 __read_mostly = NULL;
+__attribute__((cold))
 static long hook_armeabi_fstat64_ret(const struct pt_regs *regs)
 {
 	// we handle it like rp
@@ -72,7 +74,8 @@ static long hook_armeabi_fstat64_ret(const struct pt_regs *regs)
 	return ret;
 }
 
-static syscall_fn_t armeabi_read = NULL;
+static syscall_fn_t armeabi_read __read_mostly = NULL;
+__attribute__((cold))
 static long hook_armeabi_read(const struct pt_regs *regs)
 {
 	unsigned int fd = (unsigned int)regs->regs[0];	
@@ -83,7 +86,7 @@ static long hook_armeabi_read(const struct pt_regs *regs)
 
 #else // END OF 4.19+ SYSCALL HANDLERS
 
-static long (*armeabi_reboot)(int magic1, int magic2, unsigned int cmd, void __user *arg) = NULL;
+static long (*armeabi_reboot)(int magic1, int magic2, unsigned int cmd, void __user *arg) __read_mostly = NULL;
 static long hook_armeabi_reboot(int magic1, int magic2, unsigned int cmd, void __user *arg)
 {
 	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
@@ -92,7 +95,8 @@ static long hook_armeabi_reboot(int magic1, int magic2, unsigned int cmd, void _
 
 static long (*armeabi_execve)(const char __user * filename,
 				const char __user *const __user * argv,
-				const char __user *const __user * envp) = NULL;
+				const char __user *const __user * envp) __read_mostly = NULL;
+__attribute__((hot))
 static long hook_armeabi_execve(const char __user * filename,
 				const char __user *const __user * argv,
 				const char __user *const __user * envp)
@@ -101,21 +105,24 @@ static long hook_armeabi_execve(const char __user * filename,
 	return armeabi_execve(filename, argv, envp);
 }
 
-static long (*armeabi_faccessat)(int dfd, const char __user * filename, int mode) = NULL;
+static long (*armeabi_faccessat)(int dfd, const char __user * filename, int mode) __read_mostly = NULL;
+__attribute__((hot))
 static long hook_armeabi_faccessat(int dfd, const char __user * filename, int mode)
 {
 	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
 	return armeabi_faccessat(dfd, filename, mode);
 }
 
-static long (*armeabi_fstatat64)(int dfd, const char __user * filename, struct stat64 __user * statbuf, int flag) = NULL;
+static long (*armeabi_fstatat64)(int dfd, const char __user * filename, struct stat64 __user * statbuf, int flag) __read_mostly = NULL;
+__attribute__((hot))
 static long hook_armeabi_fstatat64(int dfd, const char __user * filename, struct stat64 __user * statbuf, int flag)
 {
 	ksu_handle_stat(&dfd, &filename, &flag);
 	return armeabi_fstatat64(dfd, filename, statbuf, flag);
 }
 
-static long (*armeabi_fstat64)(unsigned long fd, struct stat64 __user * statbuf) = NULL;
+static long (*armeabi_fstat64)(unsigned long fd, struct stat64 __user * statbuf) __read_mostly = NULL;
+__attribute__((cold))
 static long hook_armeabi_fstat64_ret(unsigned long fd, struct stat64 __user * statbuf)
 {
 	// we handle it like rp
@@ -124,7 +131,8 @@ static long hook_armeabi_fstat64_ret(unsigned long fd, struct stat64 __user * st
 	return ret;
 }
 
-static long (*armeabi_read)(unsigned int fd, char __user *buf, size_t count) = NULL;
+static long (*armeabi_read)(unsigned int fd, char __user *buf, size_t count) __read_mostly = NULL;
+__attribute__((cold))
 static long hook_armeabi_read(unsigned int fd, char __user *buf, size_t count)
 {
 	ksu_handle_sys_read_fd(fd);
@@ -201,8 +209,6 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 
 	smp_mb(); 
 }
-
-extern long copy_from_kernel_nofault(void *dst, const void *src, size_t size);
 
 static void restore_syscall(void *old_ptr, unsigned long syscall_nr, void *new_ptr, void *target_table)
 {
@@ -284,22 +290,19 @@ out:
 
 static int ksu_syscall_table_restore()
 {
+	set_user_nice(current, 19); // low prio
+
 loop_start:
 
 	msleep(1000);
 
-	if (FORCE_VOLATILE(ksu_vfs_read_hook))
+	if (*(volatile bool *)&ksu_vfs_read_hook)
 		goto loop_start;
 
 	restore_syscall((void *)&armeabi_fstat64, __ARMEABI_fstat64, (void *)hook_armeabi_fstat64_ret, (void *)sys_call_table);
-	restore_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)compat_sys_call_table);
+	restore_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)sys_call_table);
 	
 	return 0;
-}
-
-static void vfs_read_hook_wait_thread()
-{
-	kthread_run(ksu_syscall_table_restore, NULL, "unhook");
 }
 
 static void ksu_syscall_table_hook_init()
@@ -312,9 +315,10 @@ static void ksu_syscall_table_hook_init()
 
 	// will be unregged
 	read_and_replace_syscall((void *)&armeabi_fstat64, __ARMEABI_fstat64, (void *)hook_armeabi_fstat64_ret, (void *)sys_call_table);
-	read_and_replace_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)compat_sys_call_table);
+	read_and_replace_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)sys_call_table);
 
-	vfs_read_hook_wait_thread(); // start unreg kthread
+	// start unreg kthread
+	kthread_run(ksu_syscall_table_restore, NULL, "unhook");
 }
 
 static DEFINE_MUTEX(sucompat_toggle_mutex);

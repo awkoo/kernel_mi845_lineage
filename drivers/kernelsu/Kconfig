@@ -46,7 +46,7 @@ config KSU_FEATURE_SULOG
 config KSU_FEATURE_ADBROOT
 	bool "KernelSU ADB Root feature"
 	depends on KSU
-	default n
+	default y
 	help
 	  Build KernelSU's adb root feature.
 
