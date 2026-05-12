@@ -242,7 +242,7 @@ SUCOMPAT_HOOK_TYPE ksu_handle_stat(int *dfd, const char __user **filename_user, 
 }
 
 // sys_execve, compat_sys_execve
-SUCOMPAT_HOOK_TYPE ksu_handle_execve_sucompat(int *fd, const char __user **filename_user, void *argv, void *envp, int *flags)
+SUCOMPAT_HOOK_TYPE ksu_handle_execve(const char __user **filename_user, void *argv, void *envp)
 {
 	sys_execve_escape_ksud((void *)filename_user);
 

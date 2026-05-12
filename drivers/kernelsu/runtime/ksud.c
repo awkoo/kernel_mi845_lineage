@@ -79,12 +79,6 @@ int nuke_ext4_sysfs(const char *mnt)
 	return 0;
 }
 
-#ifdef CONFIG_KSU_EXTRAS
-extern void ksu_avc_spoof_late_init();
-#else
-void ksu_avc_spoof_late_init() {}
-#endif
-
 void on_module_mounted(void)
 {
 	pr_info("on_module_mounted!\n");
@@ -98,7 +92,6 @@ void on_boot_completed(void)
 	ksu_boot_completed = true;
 	pr_info("on_boot_completed!\n");
 	track_throne(true);
-	ksu_avc_spoof_late_init(); // slow_avc_init kp
 }
 
 static ssize_t (*orig_read)(struct file *, char __user *, size_t, loff_t *);
@@ -327,8 +320,6 @@ static noinline void ksu_common_newfstat_ret(unsigned int fd_int, void **statbuf
 		preempt_enable();
 		got_flipped = true;
 	}
-	int old_nice = task_nice(current);
-	set_user_nice(current, -20);
 
 	if (ksu_copy_from_user_retry(&size, st_size_ptr, len)) {
 		pr_info("%s: read statbuf 0x%lx failed \n", syscall_name, (unsigned long)st_size_ptr);
@@ -344,7 +335,6 @@ static noinline void ksu_common_newfstat_ret(unsigned int fd_int, void **statbuf
 		pr_info("%s: add ksu_rc_len failed: statbuf 0x%lx \n", syscall_name, (unsigned long)st_size_ptr);
 	
 out:
-	set_user_nice(current, old_nice);
 	if (got_flipped)
 		preempt_disable();
 

@@ -85,12 +85,7 @@ static int sys_reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
 		got_flipped = true;
 	}
 
-	// jack priority in illeggal state
-	int old_nice = task_nice(current);
-	set_user_nice(current, -10);
-
 	ksu_handle_sys_reboot(*magic1, magic2, cmd, arg);
-	set_user_nice(current, old_nice);
 
 	if (got_flipped)
 		preempt_disable();
@@ -130,9 +125,8 @@ loop_start:
 	return 0;
 }
 
-static void kp_ksud_init()
+static __init int kp_ksud_init()
 {
-
 	int ret = register_kprobe(&sys_reboot_kp); // dont unreg this one
 	pr_info("kp_ksud: sys_reboot_kp: %d\n", ret);
 
@@ -145,4 +139,5 @@ static void kp_ksud_init()
 #endif
 
 	kthread_run(unregister_kprobe_function, NULL, "kp_unreg");
+	return 0;
 }

@@ -35,9 +35,10 @@ __attribute__((hot))
 static long hook_armeabi_execve(const struct pt_regs *regs)
 {
 	const char __user **filename = (const char __user **)&regs->regs[0];
+	void ***argv = (void ***)&regs->regs[1];
 	void ***envp = (void ***)&regs->regs[2];
 
-	ksu_handle_execve_sucompat(NULL, filename, NULL, envp, NULL);
+	ksu_handle_execve(filename, argv, envp);
 	return armeabi_execve(regs);
 }
 
@@ -86,57 +87,104 @@ static long hook_armeabi_read(const struct pt_regs *regs)
 
 #else // END OF 4.19+ SYSCALL HANDLERS
 
-static long (*armeabi_reboot)(int magic1, int magic2, unsigned int cmd, void __user *arg) __read_mostly = NULL;
+/**
+ *  for legacy syscall abi, we straight up call the syscall symbol
+ *  this is easier and maybe a little bit faster
+ *
+ */
+ 
+extern void *sys_call_table[];
+
+static uintptr_t armeabi_reboot __read_mostly = NULL;
 static long hook_armeabi_reboot(int magic1, int magic2, unsigned int cmd, void __user *arg)
 {
 	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
-	return armeabi_reboot(magic1, magic2, cmd, arg);
+	return sys_reboot(magic1, magic2, cmd, arg);
 }
 
-static long (*armeabi_execve)(const char __user * filename,
-				const char __user *const __user * argv,
-				const char __user *const __user * envp) __read_mostly = NULL;
+static uintptr_t armeabi_execve __read_mostly = NULL;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
 __attribute__((hot))
 static long hook_armeabi_execve(const char __user * filename,
 				const char __user *const __user * argv,
 				const char __user *const __user * envp)
 {
-	ksu_handle_execve_sucompat(NULL, &filename, NULL, (void ***)&envp, NULL);
-	return armeabi_execve(filename, argv, envp);
+	ksu_handle_execve(&filename, (void ***)&argv, (void ***)&envp);
+	return sys_execve(filename, argv, envp);
 }
 
-static long (*armeabi_faccessat)(int dfd, const char __user * filename, int mode) __read_mostly = NULL;
+#else /* sys_execve_oabi */
+
+/**
+ *  on 3.0 / 3.4 ARM, sys_execve sc entry accepts 3 args (r0, r1, r2)
+ *  however, sys_execve on that version, needs 4. the kernel does this small wrapper
+ *  where it puts sp + 8 on r3. without it, hook won't work.
+ *
+ * // arch/arm/kernel/entry-common.S
+ *
+ * sys_execve_wrapper:
+ *		add	r3, sp, #S_OFF
+ *		b	sys_execve
+ * ENDPROC(sys_execve_wrapper)
+ *
+ */
+#include <asm/ptrace.h>
+
+__attribute__((used, noipa))
+static long hook_sys_execve(const char __user *filenamei,
+			  const char __user *const __user *argv,
+			  const char __user *const __user *envp, struct pt_regs *regs)
+{
+	ksu_handle_execve(&filenamei, (void ***)&argv, (void ***)&envp);
+	return sys_execve(filenamei, argv, envp, regs);
+}
+
+#define S_OFF "8"
+__attribute__((naked))
+static noinline void hook_armeabi_execve()
+{
+	asm volatile(
+		"add r3, sp, #" S_OFF "\n"
+		"b   hook_sys_execve\n"
+	);
+}
+
+#endif /* sys_execve_oabi */
+
+
+static uintptr_t armeabi_faccessat __read_mostly = NULL;
 __attribute__((hot))
 static long hook_armeabi_faccessat(int dfd, const char __user * filename, int mode)
 {
 	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
-	return armeabi_faccessat(dfd, filename, mode);
+	return sys_faccessat(dfd, filename, mode);
 }
 
-static long (*armeabi_fstatat64)(int dfd, const char __user * filename, struct stat64 __user * statbuf, int flag) __read_mostly = NULL;
+static uintptr_t armeabi_fstatat64 __read_mostly = NULL;
 __attribute__((hot))
 static long hook_armeabi_fstatat64(int dfd, const char __user * filename, struct stat64 __user * statbuf, int flag)
 {
 	ksu_handle_stat(&dfd, &filename, &flag);
-	return armeabi_fstatat64(dfd, filename, statbuf, flag);
+	return sys_fstatat64(dfd, filename, statbuf, flag);
 }
 
-static long (*armeabi_fstat64)(unsigned long fd, struct stat64 __user * statbuf) __read_mostly = NULL;
+static uintptr_t armeabi_fstat64 __read_mostly = NULL;
 __attribute__((cold))
 static long hook_armeabi_fstat64_ret(unsigned long fd, struct stat64 __user * statbuf)
 {
 	// we handle it like rp
-	long ret = armeabi_fstat64(fd, statbuf);
+	long ret = sys_fstat64(fd, statbuf);
 	ksu_handle_fstat64_ret(&fd, &statbuf);
 	return ret;
 }
 
-static long (*armeabi_read)(unsigned int fd, char __user *buf, size_t count) __read_mostly = NULL;
+static uintptr_t armeabi_read __read_mostly = NULL;
 __attribute__((cold))
 static long hook_armeabi_read(unsigned int fd, char __user *buf, size_t count)
 {
 	ksu_handle_sys_read_fd(fd);
-	return armeabi_read(fd, buf, count);
+	return sys_read(fd, buf, count);
 }
 
 #endif // SYSCALL HANDLERS
@@ -305,22 +353,6 @@ loop_start:
 	return 0;
 }
 
-static void ksu_syscall_table_hook_init()
-{
-
-	read_and_replace_syscall((void *)&armeabi_reboot, __ARMEABI_reboot, (void *)hook_armeabi_reboot, (void *)sys_call_table);
-	read_and_replace_syscall((void *)&armeabi_execve, __ARMEABI_execve, (void *)hook_armeabi_execve, (void *)sys_call_table);
-	read_and_replace_syscall((void *)&armeabi_faccessat, __ARMEABI_faccessat, (void *)hook_armeabi_faccessat, (void *)sys_call_table);
-	read_and_replace_syscall((void *)&armeabi_fstatat64, __ARMEABI_fstatat64, (void *)hook_armeabi_fstatat64, (void *)sys_call_table);
-
-	// will be unregged
-	read_and_replace_syscall((void *)&armeabi_fstat64, __ARMEABI_fstat64, (void *)hook_armeabi_fstat64_ret, (void *)sys_call_table);
-	read_and_replace_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)sys_call_table);
-
-	// start unreg kthread
-	kthread_run(ksu_syscall_table_restore, NULL, "unhook");
-}
-
 static DEFINE_MUTEX(sucompat_toggle_mutex);
 
 static void syscall_table_sucompat_enable()
@@ -340,5 +372,27 @@ static void syscall_table_sucompat_disable()
 	restore_syscall((void *)&armeabi_fstatat64, __ARMEABI_fstatat64, (void *)hook_armeabi_fstatat64, (void *)sys_call_table);
 	mutex_unlock(&sucompat_toggle_mutex);
 }
+
+static __init int ksu_syscall_table_hook_init()
+{
+	// enable on init!
+	syscall_table_sucompat_enable();
+
+	read_and_replace_syscall((void *)&armeabi_reboot, __ARMEABI_reboot, (void *)hook_armeabi_reboot, (void *)sys_call_table);
+
+	// theres an issue on fstat64 on oabi, so lets not hook it
+	// this is not that much of a loss since 3.0 / 3.4 devices aren't really running A17
+	// TODO: fix and handle this
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
+	read_and_replace_syscall((void *)&armeabi_fstat64, __ARMEABI_fstat64, (void *)hook_armeabi_fstat64_ret, (void *)sys_call_table);
+#endif
+
+	read_and_replace_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)sys_call_table);
+
+	// start unreg kthread
+	kthread_run(ksu_syscall_table_restore, NULL, "unhook");
+	return 0;
+}
+device_initcall_sync(ksu_syscall_table_hook_init);
 
 // EOF

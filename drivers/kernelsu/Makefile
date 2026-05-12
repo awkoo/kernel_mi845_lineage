@@ -5,6 +5,11 @@ obj-$(CONFIG_KSU) := ksu.o
 CFLAGS_ksu.o += -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
 CFLAGS_ksu.o += -I$(objtree)/security/selinux
 
+# uncommon, but wont hurt, check for 3-arg security_add_hooks
+ifeq ($(shell grep -A1 "void security_add_hooks" $(srctree)/include/linux/lsm_hooks.h 2>/dev/null | grep -q lsm 2>/dev/null; echo $$?),0)
+CFLAGS_ksu.o += -DKSU_COMPAT_SECURITY_ADD_HOOKS_V2
+endif
+
 ifeq ($(shell grep -q " current_sid(void)" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 CFLAGS_ksu.o += -DKSU_COMPAT_HAS_CURRENT_SID
 endif
@@ -48,6 +53,9 @@ CFLAGS_ksu.o += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-d
 CFLAGS_ksu.o += -Wno-int-conversion -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
 CFLAGS_ksu.o += -Wno-unused-variable -Wno-unused-function -Wno-format
 CFLAGS_ksu.o += -Wno-macro-redefined
+
+# dont be too strict
+CFLAGS_REMOVE_ksu.o += -Werror
 
 # so we can see stack use atleast, as we disable all stack safety here
 CFLAGS_ksu.o += $(call cc-option, -Wframe-larger-than=1024)

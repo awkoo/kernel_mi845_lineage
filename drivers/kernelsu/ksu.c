@@ -38,6 +38,7 @@
 #include "infra/event_queue.h"
 #include "feature/adb_root.h"
 #include "feature/kernel_umount.h"
+#include "feature/selinux_hide.h"
 #include "feature/sucompat.h"
 #include "feature/sulog.h"
 #include "runtime/ksud.h"
@@ -67,6 +68,7 @@
 
 #include "feature/adb_root.c"
 #include "feature/kernel_umount.c"
+#include "feature/selinux_hide.c"
 #include "feature/sucompat.c"
 #include "feature/sulog.c"
 #include "runtime/ksud.c"
@@ -84,18 +86,14 @@
 
 #ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
 #ifdef CONFIG_ARM64
-#include "hook/syscall_table_hook_arm64.c"
-#elif CONFIG_ARM
-#include "hook/syscall_table_hook_arm.c"
+	#include "hook/syscall_table_hook_arm64.c"
+#elif defined(CONFIG_ARM)
+	#include "hook/syscall_table_hook_arm.c"
 #endif
-#endif
+#endif /* CONFIG_KSU_TAMPER_SYSCALL_TABLE */
 
 #if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
 #include "hook/kp_ksud.c"
-#endif
-
-#ifdef CONFIG_KSU_EXTRAS
-#include "extras.c"
 #endif
 
 // __weak fn's
@@ -138,7 +136,15 @@ int __init kernelsu_init(void)
 	ksu_adb_root_init(); // so the feature is registered
 #endif
 
+#ifdef CONFIG_KSU_FEATURE_SELINUX_HIDE
+	ksu_selinux_hide_init();
+#endif
+
 	ksu_core_init();
+
+#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
+	kp_ksud_init();
+#endif
 
 	ksu_allowlist_init();
 
@@ -147,18 +153,6 @@ int __init kernelsu_init(void)
 	ksu_ksud_init();
 
 	ksu_file_wrapper_init();
-
-#ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
-	ksu_syscall_table_hook_init();
-#endif
-
-#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
-	kp_ksud_init();
-#endif
-
-#ifdef CONFIG_KSU_EXTRAS
-	ksu_avc_spoof_init(); // so the feature is registered
-#endif
 
 	return 0;
 }

@@ -24,6 +24,26 @@ static noinline void ksu_grab_data_system_inode()
 	path_put(&path);
 }
 
+__attribute__((cold))
+static noinline void ksu_rename_observer_slow(struct dentry *old_dentry, struct dentry *new_dentry)
+{
+	system_dir_inode_ptr = NULL; // reset cached inode
+
+	char path[128] = { 0 };
+	char *buf = dentry_path_raw(new_dentry, path, sizeof(path) - 1);
+	if (IS_ERR(buf)) {
+		pr_err("dentry_path_raw failed.\n");
+		return;
+	}
+
+	if (!strstr(buf, "/system/packages.list"))
+		return;
+
+	pr_info("renameat: %s -> %s, new path: %s\n", old_dentry->d_iname, new_dentry->d_iname, buf);
+	track_throne(false);
+	return;
+}
+
 static inline void ksu_rename_observer(struct dentry *old_dentry, struct dentry *new_dentry)
 {
 	// skip kernel threads
@@ -71,19 +91,6 @@ static inline void ksu_rename_observer(struct dentry *old_dentry, struct dentry 
 	return;
 
 slow_path:
-	system_dir_inode_ptr = NULL; // reset cached inode
-
-	char path[128] = { 0 };
-	char *buf = dentry_path_raw(new_dentry, path, sizeof(path) - 1);
-	if (IS_ERR(buf)) {
-		pr_err("dentry_path_raw failed.\n");
-		return;
-	}
-
-	if (!strstr(buf, "/system/packages.list"))
-		return;
-
-	pr_info("renameat: %s -> %s, new path: %s\n", old_dentry->d_iname, new_dentry->d_iname, buf);
-	track_throne(false);
+	ksu_rename_observer_slow(old_dentry, new_dentry);
 	return;
 }

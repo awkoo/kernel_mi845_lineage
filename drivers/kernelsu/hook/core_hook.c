@@ -58,23 +58,34 @@ static struct security_hook_list ksu_hooks[] __ro_after_init = {
 #endif
 };
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-static void ksu_lsm_hook_init(void)
-{
-	security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), "ksu");
-}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0) || defined(KSU_COMPAT_SECURITY_ADD_HOOKS_V2)
+#define ksu_security_add_hooks security_add_hooks
 #else
-static void ksu_lsm_hook_init(void)
-{
-	security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks));
-}
+#define ksu_security_add_hooks(a, b, c) security_add_hooks(a, b)
 #endif
+
+static __init void ksu_lsm_hook_init(void)
+{
+	ksu_security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), "ksu");
+
+	pr_info("core_hook: initialized %d LSMs \n", ARRAY_SIZE(ksu_hooks));
+}
 
 #else /* < 4.2, LSM */
 
 // selinux_ops (LSM), security_operations struct tampering for ultra legacy
 
 static uintptr_t selinux_ops_addr = NULL;
+
+#ifdef CONFIG_KSU_FEATURE_SELINUX_HIDE
+static int (*orig_setprocattr) (struct task_struct *p, char *name, void *value, size_t size) = NULL;
+static int hook_setprocattr(struct task_struct *p, char *name, void *value, size_t size)
+{
+
+	ksu_hide_setprocattr(name, value, size);
+	return orig_setprocattr(p, name, value, size);
+}
+#endif
 
 static int (*orig_inode_rename) (struct inode *old_dir, struct dentry *old_dentry,
 			     struct inode *new_dir, struct dentry *new_dentry) = NULL;
@@ -365,6 +376,11 @@ static int ksu_register_lsm_hook(void *data)
 
 	orig_inode_rename = ops->inode_rename;
 	ops->inode_rename = hook_inode_rename;
+
+#ifdef CONFIG_KSU_FEATURE_SELINUX_HIDE
+	orig_setprocattr = ops->setprocattr;
+	ops->setprocattr = hook_setprocattr;
+#endif
 
 	orig_task_fix_setuid = ops->task_fix_setuid;
 	ops->task_fix_setuid = hook_task_fix_setuid;
