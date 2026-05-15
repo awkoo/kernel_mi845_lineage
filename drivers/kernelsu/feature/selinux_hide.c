@@ -29,11 +29,11 @@ static inline int ksu_selinux_get_sids()
 
 	err = security_secctx_to_secid("u:r:ksu:s0", strlen("u:r:ksu:s0"), &ksu_sid);
 	if (!err)
-		pr_info("selinux_hide: ksu_sid: %u\n", su_sid);
+		pr_info("selinux_hide: ksu_sid: %u\n", ksu_sid);
 
 	err = security_secctx_to_secid("u:r:priv_app:s0:c512,c768", strlen("u:r:priv_app:s0:c512,c768"), &priv_app_sid);
 	if (!err)
-		pr_info("selinux_hide: priv_app_sid: %u\n", su_sid);
+		pr_info("selinux_hide: priv_app_sid: %u\n", priv_app_sid);
 
 	if (!su_sid || !ksu_sid || !priv_app_sid)
 		return -1;
@@ -76,17 +76,32 @@ static inline bool ksu_should_destroy_context(char *str)
 	if (!str)
 		return false;
 
-	struct ksu_hidden_node *node;
-
 	read_lock(&ksu_sepolicy_shitlist_lock);
-	list_for_each_entry(node, &ksu_sepolicy_rule_list, list) {
-		if (strstr(str, node->name)) {
+
+	struct ksu_type_node *t_node;
+	list_for_each_entry(t_node, &ksu_hide_type_list, list) {
+		if (strstr(str, t_node->padded_name)) {
 			read_unlock(&ksu_sepolicy_shitlist_lock);
 			return true;
 		}
 	}
-	read_unlock(&ksu_sepolicy_shitlist_lock);
 
+	// double strstr
+	char *str2 = strchr(str, ' ');
+	if (!str2) {
+		read_unlock(&ksu_sepolicy_shitlist_lock);
+		return false;
+	}		
+
+	struct ksu_rule_node *r_node;
+	list_for_each_entry(r_node, &ksu_hide_rule_list, list) {
+		if (strstr(str, r_node->src) && strstr(str2, r_node->tgt)) {
+			read_unlock(&ksu_sepolicy_shitlist_lock);
+			return true;
+		}
+	}
+
+	read_unlock(&ksu_sepolicy_shitlist_lock);
 	return false;
 }
 
@@ -134,7 +149,7 @@ int ksu_hide_setprocattr(const char *name, void *value, size_t size)
 	if (!ksu_should_destroy_context(buf))
 		return 0;
 	
-	pr_info("block setprocattr for context: %s\n", buf);
+	pr_info("selinux_hide: setprocattr: destory: %s\n", buf);
 	str[1] = '1';
 
 	return 0;
@@ -166,7 +181,7 @@ void ksu_sel_write_context(struct file **file, char **buf, size_t *size)
 	if (!ksu_should_destroy_context(mbuf))
 		return;
 
-	pr_info("selinux_hide: destroy: %s \n", mbuf);
+	pr_info("selinux_hide: sel_context: destroy: %s \n", mbuf);
 	mbuf[1] = '1';
 	return;
 
@@ -297,7 +312,7 @@ static void ksu_selinux_hide_enable()
 {
 	int ret = ksu_selinux_get_sids();
 	if (ret)
-		pr_info("selinux_hide: sid grab fail!\n");
+		pr_info("selinux_hide: sid grab fail?\n");
 
 #if defined(CONFIG_KPROBES)
 	slow_avc_audit_kp = init_kprobe("slow_avc_audit", slow_avc_audit_pre_handler);
@@ -348,9 +363,14 @@ start:
 		goto start;
 
 bail:
+	;
+	const char *ksu_domain_args[] = { KERNEL_SU_DOMAIN, NULL };
+	const char *ksu_file_args[] = { KERNEL_SU_FILE, NULL };
+	const char *adbroot_args[] = { "adbroot", NULL };
 
-	ksu_add_shit_to_list(KERNEL_SU_DOMAIN);
-	ksu_add_shit_to_list(KERNEL_SU_FILE);
+	ksu_add_shit_to_list(KSU_SEPOLICY_CMD_TYPE, ksu_domain_args);
+	ksu_add_shit_to_list(KSU_SEPOLICY_CMD_TYPE, ksu_file_args);
+	ksu_add_shit_to_list(KSU_SEPOLICY_CMD_TYPE, adbroot_args);
 
 	ksu_selinux_hide_enable();
 	return 0;

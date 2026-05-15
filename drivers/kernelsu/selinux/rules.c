@@ -542,10 +542,7 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 			pr_err("sepol: cmd #%u failed, cmd=%u subcmd=%u.\n", cmd_index, header.cmd, header.subcmd);
 		} else {
 			success_cmd_count++;
-			int argc = sepol_expected_argc(header.cmd);
-			int i;
-			for (i = 0; i < argc; i++)
-				ksu_add_shit_to_list(args[i]);
+			ksu_add_shit_to_list(header.cmd, args);
 		}
 		cmd_index++;
 	}
@@ -623,10 +620,7 @@ static int handle_sepolicy_fn(void *data)
 		else {
 			pr_info("sepol: cmd #%u success, cmd=%u subcmd=%u.\n", cmd_index, header.cmd, header.subcmd);
 			success_cmd_count++;
-			int argc = sepol_expected_argc(header.cmd);
-			int i;
-			for (i = 0; i < argc; i++)
-				ksu_add_shit_to_list(args[i]);
+			ksu_add_shit_to_list(header.cmd, args);
 
 		}
 
