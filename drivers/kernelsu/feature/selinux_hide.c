@@ -364,12 +364,18 @@ start:
 
 bail:
 	;
+	// apply_kernelsu_rules_fn
 	const char *ksu_domain_args[] = { KERNEL_SU_DOMAIN, NULL };
-	const char *ksu_file_args[] = { KERNEL_SU_FILE, NULL };
-	const char *adbroot_args[] = { "adbroot", NULL };
-
 	ksu_add_shit_to_list(KSU_SEPOLICY_CMD_TYPE, ksu_domain_args);
+
+	const char *ksu_file_args[] = { KERNEL_SU_FILE, NULL };
 	ksu_add_shit_to_list(KSU_SEPOLICY_CMD_TYPE, ksu_file_args);
+
+	const char *init_adb_args[] = { "init", "adb_data_file", NULL };
+	ksu_add_shit_to_list(KSU_SEPOLICY_CMD_NORMAL_PERM, init_adb_args);
+
+	// extra, but lets take care of this
+	const char *adbroot_args[] = { "adbroot", NULL };
 	ksu_add_shit_to_list(KSU_SEPOLICY_CMD_TYPE, adbroot_args);
 
 	ksu_selinux_hide_enable();
