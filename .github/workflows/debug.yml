@@ -1,0 +1,221 @@
+name: Build debug kernel
+
+on:
+  workflow_dispatch:
+
+env:
+  AOSP_TOOLCHAIN_BRANCH: android16
+  AOSP_CLANG_VERSION: r547379
+
+jobs:
+  build:
+    timeout-minutes: 60
+    name: Build kernel
+    permissions: { contents: read }
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - device: beryllium
+            device_name: "Xiaomi Poco F1"
+            boot_block: auto
+            is_primary: true
+          #- device: dipper
+          #  device_name: "Xiaomi Mi 8"
+          #  boot_block: auto
+          #  is_primary: false
+          #- device: equuleus
+          #  device_name: "Xiaomi Mi 8 Pro"
+          #  boot_block: auto
+          #  is_primary: false
+          #- device: perseus
+          #  device_name: "Xiaomi Mi MIX 3"
+          #  boot_block: auto
+          #  is_primary: false
+          #- device: polaris
+          #  device_name: "Xiaomi Mi MIX 2S"
+          #  boot_block: auto
+          #  is_primary: false
+          #- device: ursa
+          #  device_name: "Xiaomi Mi 8 Explorer Edition"
+          #  boot_block: auto
+          #  is_primary: false
+    steps:
+      - name: Install dependencies
+        run: |
+          dependencies=(
+            ccache
+            binutils-aarch64-linux-gnu
+            binutils-arm-linux-gnueabi
+            make
+          )
+
+          sudo apt-get update -y -q
+          sudo apt-get install -y -q "${dependencies[@]}" --no-install-recommends
+
+      - name: Sync repo
+        uses: actions/checkout@v7
+        with:
+          path: kernel
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Cache Clang
+        id: cache-clang
+        uses: actions/cache/restore@v6
+        with:
+          path: clang
+          key: clang-${{ env.AOSP_TOOLCHAIN_BRANCH }}-${{ env.AOSP_CLANG_VERSION }}
+
+      - name: Setup Clang
+        id: download_clang
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "clang/"
+          wget -c -t 10 -O "clang.tar.gz" "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/${{ env.AOSP_TOOLCHAIN_BRANCH }}-release/clang-${{ env.AOSP_CLANG_VERSION }}.tar.gz"
+          tar -zxf "clang.tar.gz" -C "clang/"
+
+      - name: Save Clang
+        if: steps.cache-clang.outputs.cache-hit != 'true' && steps.download_clang.outcome == 'success'
+        uses: actions/cache/save@v6
+        with:
+          path: clang
+          key: clang-${{ env.AOSP_TOOLCHAIN_BRANCH }}-${{ env.AOSP_CLANG_VERSION }}
+
+      - name: Setup ccache
+        run: |
+          mkdir -p .ccache
+          ccache -M 5G
+
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-kernel-${{ github.run_id }}
+          restore-keys: |
+            ccache-kernel-
+
+      - name: Reset ccache statistics
+        run: |
+          ccache -d .ccache -z
+
+      - name: Compile kernel
+        working-directory: kernel
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_NOHASHDIR: 1
+          CCACHE_COMPILERCHECK: content
+          CCACHE_BASEDIR: ${{ github.workspace }}
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          # export KBUILD_BUILD_USER=${{ github.repository_owner }}
+          # export KBUILD_BUILD_HOST=
+          export KBUILD_BUILD_TIMESTAMP=$(date -u -d "@$(git log -1 --format=%at)" +"%a %b %d %H:%M:%S %Z %Y")
+          make -j$(nproc --all) \
+               O=out \
+               LLVM=1 \
+               LLVM_IAS=1 \
+               CC="ccache clang" \
+               LD=ld.lld \
+               ARCH=arm64 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               vendor/xiaomi/mi845_defconfig \
+               vendor/xiaomi/${{ matrix.device }}.config \
+               all
+
+      - name: Show ccache statistics
+        if: always()
+        run: ccache -d .ccache -s
+
+      - name: Save ccache
+        if: always() && matrix.is_primary == true && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-kernel-${{ github.run_id }}
+
+      - name: Create build metadata
+        if: matrix.is_primary == true
+        working-directory: kernel
+        run: |
+          KERNEL_VER=$(cat out/include/config/kernel.release)
+          CLANG_VER=$(../clang/bin/clang --version | head -1 | grep -oE 'clang version [0-9.]+' | awk '{print $3}')
+          MAKE_VER=$(make --version | head -1 | awk '{print $3}')
+          COMMIT_HASH=$(git log -1 --format=%h)
+          COMMIT_SUBJECT=$(git log -1 --format=%s)
+          COMMIT_DATE=$(git log -1 --format=%cs)
+
+          jq -n \
+            --arg kv "${KERNEL_VER}" \
+            --arg cv "${CLANG_VER}" \
+            --arg ci "${{ env.AOSP_CLANG_VERSION }}" \
+            --arg mv "${MAKE_VER}" \
+            --arg ch "${COMMIT_HASH}" \
+            --arg cs "${COMMIT_SUBJECT}" \
+            --arg cd "${COMMIT_DATE}" \
+            '{
+              kernel_version: $kv,
+              clang_version: $cv,
+              clang_id: $ci,
+              make_version: $mv,
+              commit_hash: $ch,
+              commit_subject: $cs,
+              commit_date: $cd
+            }' > ../build-info.json
+
+          echo "=== Build metadata ==="
+          cat ../build-info.json
+
+      - name: Upload build metadata
+        if: matrix.is_primary == true
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-info.json
+          path: build-info.json
+          compression-level: 0
+
+      - name: Build AnyKernel3 flashable zip
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
+
+          if [ ! -f kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
+            echo "Error: Image.gz-dtb not found in build output."
+            exit 2
+          fi
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb ak3/
+
+          if [ -f build-info.json ]; then
+            KERNEL_VER=$(jq -r '.kernel_version' build-info.json)
+            COMMIT_HASH=$(jq -r '.commit_hash' build-info.json)
+          else
+            KERNEL_VER="unknown"
+            COMMIT_HASH="unknown"
+          fi
+
+          cd ak3
+          sed -i \
+            -e 's/kernel.string=.*/kernel.string=Kernel ${KERNEL_VER} for ${{ matrix.device_name }}/' \
+            -e 's/device.name1=.*/device.name1=${{ matrix.device }}/' \
+            -e 's/device.name2=.*/device.name2=/' \
+            -e 's/device.name3=.*/device.name3=/' \
+            -e 's/device.name4=.*/device.name4=/' \
+            anykernel.sh
+
+          # Do not use the pattern "^#*BLOCK=.*" since there are several lines containing "BLOCK=".
+          sed -i -e 's|BLOCK=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|BLOCK=${{ matrix.boot_block }}|' anykernel.sh
+
+          ZIP_NAME="Anykernel3-${{ matrix.device }}-${KERNEL_VER}-${COMMIT_HASH}.zip"
+          zip -qr9 "${ZIP_NAME}" . -x "./.git/*" "./.github/*" "./README.md"
+
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: kernel-${{ matrix.device }}-ak3
+          path: ak3/${{ env.ZIP_NAME }}
+          compression-level: 0
